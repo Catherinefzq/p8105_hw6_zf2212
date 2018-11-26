@@ -111,7 +111,7 @@ all_logistic %>%
   ggplot(aes(x = city_state, y = OR)) +
   geom_point() +
   geom_errorbar(aes(ymin = conf_low, ymax = conf_up)) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 7), plot.title = element_text(hjust = 0.5, size = 12)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10), plot.title = element_text(hjust = 0.5, size = 12)) +
   labs(title = "Adjusted ORs and CIs for Solving Homicides Comparing Non-white Victims to White Victims",
        y = "Adjusted Odds Ratio",
        x = "City State")
@@ -142,6 +142,8 @@ bw_data = bw_raw %>%
          frace, frace = as.factor(frace),
          malform, malform = as.factor(malform),
          mrace, mrace = as.factor(mrace))
+# look at the distribution of outcomes
+bw_data %>% ggplot(aes(bwt)) + geom_histogram()
 ```
 
 ```{r model select function}
@@ -158,43 +160,86 @@ best <- function(model, ...)
 ```{r bulid my model}
 # fit a model with all predictors
 bwt_fit = lm(bwt ~ ., data = bw_data)
-# conduct a stepwise
+# conduct a backward procedure
 step(bwt_fit, direction = 'backward')
-
-best_tb = best(bwt_fit, nbest = 1) 
-knitr::kable(best_tb)
+# look at criterian-based parameters
+best_tb = best(bwt_fit, nbest = 1, nvmax = 13) 
+knitr::kable(best_tb, digits = 3)
 ```
 
 __Description__
 
+The distribution of `bwt` is approximately bell-shape. Therefore, I will not transform it. 
+
 First, by doing a `backward` search procedure, the model starts with all predictors and removes the predictor with highest p-value. It turns out the best fit is `bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken`, which has the lowest `AIC = 48705.38` and therefore has the most parsimonious fit.
 
-Then, I use a function based on `leaps::regsubsets` to take a look at the Criterian-Based Parameters of 
+Then, I use a function based on `leaps::regsubsets` to take a look at the Criterian-Based Parameters. Compare the models with `bic`, `cp` and `adjr2`. The best model is `bwt ~ babysex + bhead + blength + delwt + frace + gaweeks + mrace + ppbmi + smoken`, with the lowest `bic = -5398.119`, lowest `cp = 14.44586`, and the highest `adjr2 = 0.7164732`. 
+
+Compare the two models aboved, to choose a model with maximize power and minimize the number of predictors, the second model is a better choice.
+
+Therefore, I decided to choose the model `bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken`. 
 
 
 ```{r}
-bwt_best = lm(bwt ~ babysex + bhead + blength + delwt + frace + gaweeks + mrace + ppbmi + smoken, data = bw_data)
-plot(bwt_best)
+bwt_best = lm(bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken, data = bw_data)
 
 bw_data %>% 
-  select(bwt, babysex, bhead, blength, delwt, fincome, gaweeks, mrace, ppbmi, smoken) %>% 
+  select(bwt, babysex, bhead, blength, delwt, fincome, gaweeks, mheight, mrace, parity, ppwt, smoken) %>% 
   add_residuals(bwt_best) %>% 
   add_predictions(bwt_best) %>%
   ggplot(aes(x = pred, y = resid)) +
   geom_point(alpha = 0.5) +
   geom_smooth() +
-  labs(title = "Residuals against fitted values")
+  labs(title = "Residuals against Fitted Values")
 ```
+
+#### 2.2 
 
 Compare your model to two others:
 
-One using length at birth and gestational age as predictors (main effects only)
-One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+```{r compare models}
+# fit two other models
+fit2 = lm(bwt ~ blength + gaweeks, data = bw_data)
+fit3 = lm(bwt ~ babysex + bhead + blength + babysex*bhead + babysex*blength + bhead*blength + babysex*bhead*blength , data = bw_data)
+# look at the summary of each model
+tibble(bwt_best = summary(bwt_best)$adj.r.squared,
+  fit2 = summary(fit2)$adj.r.squared,
+  fit3 = summary(fit3)$adj.r.squared) %>% knitr::kable(digits = 3)
+```
+
+`fit2` using length at birth and gestational age as predictors (main effects only).
+
+`fit3` using head circumference, length, sex, and all interactions (including the three-way interaction) between these.
+
+The table above includes the `adjusted R-square` of each model. `bwt_best` has the highest value.
+
+#### 2.3
+
 Make this comparison in terms of the cross-validated prediction error; use crossv_mc and functions in purrr as appropriate.
 
-Note that although we expect your model to be reasonable, model building itself is not a main idea of the course and we don’t necessarily expect your model to be “optimal”.
-
-```{r }
-
+```{r cross validation}
+cv_df = 
+  crossv_mc(bw_data, 1000) %>%
+  mutate(train = map(train, as_tibble),
+         test = map(test, as_tibble)) %>% 
+  mutate(bwt_best = map(train, ~lm(bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken, data = .x)),
+         fit2 = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+         fit3 = map(train, ~lm(bwt ~ babysex + bhead + blength + babysex*bhead + babysex*blength + bhead*blength + babysex*bhead*blength , data = .x)),
+         rmse_best = map2_dbl(bwt_best, test, ~rmse(model = .x, data = .y)),
+         rmse_2 = map2_dbl(fit2, test, ~rmse(model = .x, data = .y)),
+         rmse_3 = map2_dbl(fit3, test, ~rmse(model = .x, data = .y)))
 ```
+
+```{r violin plot}
+cv_df %>% 
+select(starts_with("rmse")) %>% 
+  gather(key = model, value = rmse) %>% 
+  mutate(model = str_replace(model, "rmse_", ""),
+         model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+__Comment__
+
+According to the violin plot, mean squared errors (RMSEs) of `best` has the lowest `rmse` among 3 models. Therefore, it is the best fit from my modeling process.
 
